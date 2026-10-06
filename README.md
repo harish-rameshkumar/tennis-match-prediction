@@ -130,6 +130,21 @@ _TODO_
 | 2019 | 61.3% |
 | 2023–24 | 63.5% |
 
-The paper reports about 65.5% for this baseline. On our data, 2015–2018 give 67.9%, 67.2%,
-65.0% and 63.6%, so 2019 is a lower-than-usual year. The paper probably used only part of the
-2019 season.
+## Data notes
+
+- **Rank baseline:** on our 2019 test set, the higher-ranked player wins **61.3%** of matches.
+  The paper reports 65.5%. Earlier years agree with the paper (2015–2018: 67.9%, 67.2%,
+  65.0%, 63.6%), so 2019 is a low year rather than a data problem. The paper probably used
+  only part of the 2019 season. Compare models against 61.3%, not 65.5%.
+- **ATP main tour:** Grand Slams (`G`), Masters (`M`), ATP 250/500 (`A`) and the Tour
+  Finals (`F`). Davis Cup, Olympics, Challenger and qualifying matches are used for training
+  only, never as test matches.
+- **`match_date`** is the tournament **start** date, because the data has no per-match date.
+  Matches in the same tournament share it and are ordered by round. Features computed from
+  history must only use earlier tournaments or earlier rounds.
+- **Missing values:** rank points, height, hand and age are filled with the training-set median,
+  pooled over players A and B, and flagged in a `*_missing` column. Rows with no rank are dropped.
+- **Walkovers and score-less rows are excluded** (932 rows): no tennis was played, or we can't
+  tell whether it was. Retirements are kept.
+- **Spot check:** the 2019 Grand Slam finals in the cleaned data match the real results
+  (Djokovic d. Nadal, Nadal d. Thiem, Djokovic d. Federer 13-12(3) in the fifth set, Nadal d. Medvedev).
