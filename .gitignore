@@ -4,3 +4,5 @@ data/processed/
 models/*.joblib
 .DS_Store
 __pycache__/
+*.egg-info/
+.pytest_cache/
