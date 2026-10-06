@@ -6,10 +6,12 @@ Each cleaned match becomes two rows: (A=winner, B=loser, label=1) and the swappe
     python -m tennis.dataset    # build data/processed/pairs.parquet and print a summary
 """
 
+import numpy as np
 import pandas as pd
 
 from tennis import config
 from tennis.clean import clean
+from tennis.features import DIFF_FEATURES, FLAG_FEATURES, PAIR_FEATURES, compute_features
 from tennis.load import load_raw
 
 ID_COLUMNS = ["match_id", "match_date", "year", "tour_level", "surface", "label",
@@ -30,9 +32,17 @@ BASE_FEATURES = ["rank", "rank_points", "height", "hand", "age"]
 # rank is never missing after cleaning, so it gets no indicator.
 IMPUTED_FEATURES = ["rank_points", "height", "hand", "age"]
 
+# History-based features from tennis.features: diff_<f> = A - B, flags as <f>_a / <f>_b.
+HISTORY_COLUMNS = (
+    [f"diff_{f}" for f in DIFF_FEATURES]
+    + [f"{f}_{s}" for f in FLAG_FEATURES for s in "ab"]
+    + PAIR_FEATURES
+)
+
 FEATURE_COLUMNS = (
     [f"{f}_{s}" for f in BASE_FEATURES for s in "ab"]
     + [f"{f}_{s}_missing" for f in IMPUTED_FEATURES for s in "ab"]
+    + HISTORY_COLUMNS
 )
 
 MAIN_TOUR_LEVELS = ["G", "M", "A", "F"]
@@ -70,7 +80,28 @@ def build_pairs(matches: pd.DataFrame) -> pd.DataFrame:
         for s in "ab":
             pairs[f"{f}_{s}_missing"] = pairs[f"{f}_{s}"].isna().astype(int)
 
+    pairs = pd.concat([pairs, _history_columns(matches, len(pairs))], axis=1)
     return pairs[ID_COLUMNS + META_COLUMNS + FEATURE_COLUMNS]
+
+
+def _history_columns(matches: pd.DataFrame, n_rows: int) -> pd.DataFrame:
+    """Mirror tennis.features output onto the interleaved (won, lost) rows."""
+    feats = compute_features(matches)
+    out = {}
+    for f in DIFF_FEATURES:
+        diff = feats[f"winner_{f}"].to_numpy() - feats[f"loser_{f}"].to_numpy()
+        col = np.empty(n_rows)
+        col[0::2], col[1::2] = diff, -diff
+        out[f"diff_{f}"] = col
+    for f in FLAG_FEATURES:
+        w, l = feats[f"winner_{f}"].to_numpy(int), feats[f"loser_{f}"].to_numpy(int)
+        a, b = np.empty(n_rows, int), np.empty(n_rows, int)
+        a[0::2], a[1::2] = w, l
+        b[0::2], b[1::2] = l, w
+        out[f"{f}_a"], out[f"{f}_b"] = a, b
+    for f in PAIR_FEATURES:
+        out[f] = np.repeat(feats[f].to_numpy(), 2)
+    return pd.DataFrame(out)
 
 
 def build(path=config.PAIRS_PATH) -> pd.DataFrame:
