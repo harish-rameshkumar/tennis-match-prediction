@@ -14,11 +14,110 @@ Pre-match winner prediction for ATP singles matches using machine learning, repr
 
 ## Setup
 
-_TODO_
+Requires Python 3.11+ (developed on 3.13, macOS arm64). Do not use a conda base environment.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install -e .                   # makes `import tennis` work from anywhere
+```
 
 ## Data
 
-_TODO_
+The data is Jeff Sackmann's ATP match data (CC BY-NC-SA 4.0). His original
+`JeffSackmann/tennis_atp` GitHub repo is no longer available, so we download it from the
+archival mirror [`Aneeshers/tennis-sackmann-archive`](https://github.com/Aneeshers/tennis-sackmann-archive),
+pinned to commit `83733587`. Every file is checked against [data/SHA256SUMS](data/SHA256SUMS).
+
+| Files | Years | Used for |
+| --- | --- | --- |
+| `atp_matches_YYYY.csv` | 1997–2024 | ATP main tour (incl. Davis Cup) |
+| `atp_matches_qual_chall_YYYY.csv` | 2010–2024 | Challengers and ATP qualifying |
+
+```bash
+python scripts/download_data.py    # ~40 MB into data/raw/, verified
+python -m tennis.dataset           # builds data/processed/pairs.parquet (~3 s)
+pytest                             # dataset tests
+```
+
+`data/raw/` and `data/processed/` are gitignored.
+
+### Cleaning rules ([src/tennis/clean.py](src/tennis/clean.py))
+
+1. Drop rows missing `winner_id`, `loser_id`, `tourney_date`, `winner_rank` or `loser_rank`,
+   and rows where winner and loser are the same player.
+2. Exclude walkovers (`W/O`, `Walkover` in the score). Rows with no score are also dropped:
+   they have no match statistics and can't be told apart from walkovers.
+3. Keep retirements (`RET`), defaults (`DEF`) and abandoned matches. The recorded winner stands.
+4. Qualifying rounds (`Q1`–`Q4`) get `tour_level = "Q"`. Otherwise `tour_level` is Sackmann's
+   `tourney_level`.
+5. Missing surface becomes `"Unknown"`. Hand codes other than `R`/`L` are treated as missing.
+
+This keeps 196,780 of 205,168 matches. 7,453 rows are dropped for a missing ID, date or rank,
+3 for self-matches and 932 as walkovers or score-less rows.
+
+## Dataset interface
+
+`data/processed/pairs.parquet` has **one row per (player A, player B, match)**. Every match
+appears twice: once with A = winner (`label = 1`) and once with the players swapped
+(`label = 0`). The two rows are adjacent, and the table is in chronological order.
+
+### Columns
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `match_id` | str | `"{tourney_id}-{match_num}"`, unique per match, shared by its two rows |
+| `match_date` | datetime | Tournament **start** date (the data has no per-match date) |
+| `year` | int | Season (the year in the source file name). Early-January events can have a December `match_date`. |
+| `tour_level` | str | `G` Grand Slam, `M` Masters, `A` ATP 250/500, `F` Tour Finals, `D` Davis Cup, `O` Olympics, `C` Challenger, `Q` qualifying |
+| `surface` | str | `Hard`, `Clay`, `Grass`, `Carpet`, `Unknown` |
+| `label` | int | 1 if player A won, 0 if player A lost |
+| `player_a_id`, `player_b_id` | int | Sackmann player IDs |
+| `tourney_name`, `round`, `player_a_name`, `player_b_name` | str | Metadata for display and error analysis. **Not features.** |
+
+**Features** (`tennis.dataset.FEATURE_COLUMNS`) are raw values, not differences, as in the paper:
+
+| Column | Meaning | Missing in raw data |
+| --- | --- | --- |
+| `rank_a`, `rank_b` | ATP rank at the tournament date | never (rows without rank are dropped) |
+| `rank_points_a`, `rank_points_b` | ATP ranking points | median-filled |
+| `height_a`, `height_b` | height in cm | median-filled |
+| `hand_a`, `hand_b` | 1 = left-handed, 0 = right-handed | median-filled (→ 0) |
+| `age_a`, `age_b` | age in years at the tournament date | median-filled |
+| `<feature>_missing` | 1 if that value was missing and filled in, else 0 (for rank_points, height, hand, age) | — |
+
+In the parquet file the feature columns still contain NaN. `get_train_test` fills them with
+the **training-set median**, pooled over the `_a` and `_b` columns so the two rows of a match stay mirror images.
+This way no statistics from the test years leak into training.
+
+### `get_train_test(test_year=2019, test_end_year=None, pairs=None) -> (train, test)`
+
+```python
+from tennis.dataset import get_train_test, FEATURE_COLUMNS
+
+train, test = get_train_test()                 # paper setup: test on 2019
+train, test = get_train_test(2023, 2024)       # robustness check: train <= 2022, test 2023-24
+X_train, y_train = train[FEATURE_COLUMNS], train["label"]
+```
+
+Contract:
+- **train** contains every pair with `year < test_year`, at every tour level, including
+  Challenger, qualifying and Davis Cup.
+- **test** contains only ATP main-tour pairs (`tour_level` in `G, M, A, F`) with
+  `test_year <= year <= test_end_year`. `test_end_year` defaults to `test_year`.
+- Both rows of a match are always in the same split, because they share `match_id` and `year`.
+- Both DataFrames are sorted chronologically, have a fresh `RangeIndex`, and their
+  `FEATURE_COLUMNS` contain no NaN.
+- `pairs` is optional. Pass an already-loaded table to avoid re-reading the parquet file.
+
+To evaluate one prediction per match, combine the two rows: P(A wins) =
+½·(p(A,B) + 1 − p(B,A)).
+
+| Split | Train | Test |
+| --- | --- | --- |
+| `get_train_test()` | 263,124 rows (131,562 matches, 1997–2018) | 5,194 rows (2,597 matches) |
+| `get_train_test(2023, 2024)` | 339,630 rows (169,815 matches, 1997–2022) | 10,928 rows (5,464 matches) |
 
 ## Usage
 
@@ -26,4 +125,11 @@ _TODO_
 
 ## Results
 
-_TODO_
+| Test set | Higher-ranked player wins |
+| --- | --- |
+| 2019 | 61.3% |
+| 2023–24 | 63.5% |
+
+The paper reports about 65.5% for this baseline. On our data, 2015–2018 give 67.9%, 67.2%,
+65.0% and 63.6%, so 2019 is a lower-than-usual year. The paper probably used only part of the
+2019 season.
