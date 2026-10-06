@@ -37,7 +37,7 @@ pinned to commit `83733587`. Every file is checked against [data/SHA256SUMS](dat
 
 ```bash
 python scripts/download_data.py    # ~40 MB into data/raw/, verified
-python -m tennis.dataset           # builds data/processed/pairs.parquet (~3 s)
+python -m tennis.dataset           # builds data/processed/pairs.parquet (~20 s)
 pytest                             # dataset tests
 ```
 
@@ -87,7 +87,50 @@ appears twice: once with A = winner (`label = 1`) and once with the players swap
 | `age_a`, `age_b` | age in years at the tournament date | median-filled |
 | `<feature>_missing` | 1 if that value was missing and filled in, else 0 (for rank_points, height, hand, age) | — |
 
-In the parquet file the feature columns still contain NaN. `get_train_test` fills them with
+#### History-based features ([src/tennis/features.py](src/tennis/features.py))
+
+These are computed in one chronological pass over **all** levels, including Challenger,
+qualifying and Davis Cup. The **history** of a match is every match from a tournament with
+a strictly earlier start date, plus earlier rounds of the same tournament. Same-round
+matches, later rounds and other tournaments that start on the same date are never used.
+[tests/test_no_leakage.py](tests/test_no_leakage.py) checks every feature against a
+brute-force rebuild from filtered data.
+
+Naming conventions:
+- `diff_<f>` = value for A − value for B. The mirrored row holds exactly the negative.
+- `<f>_a` / `<f>_b` are per-player flags. They swap in the mirrored row.
+- A player with no history gets 0 for every value, and `has_history_<side>` = 0.
+
+| Column | Per-player value behind the difference / flag |
+| --- | --- |
+| `has_history_a`, `has_history_b` | 1 if the player has at least one match in their history |
+| `diff_career_wins`, `diff_career_losses`, `diff_career_win_rate` | career record |
+| `diff_last{5,10,15,25}_played`, `diff_last{5,10,15,25}_win_rate` | matches counted (≤ window) and win rate over the last N matches |
+| `diff_recent30_wins`, `diff_recent30_losses` | record in tournaments starting in the 30 days before this tournament's start |
+| `diff_surface_wins`, `diff_surface_losses`, `diff_surface_win_rate` | career record on this match's surface |
+| `diff_surface_last{5,10,15,25}_played`, `diff_surface_last{5,10,15,25}_win_rate` | the same last-N form, on this surface only |
+| `diff_tourney_wins`, `diff_tourney_losses` | record at this event in any year, including earlier rounds this year |
+| `diff_h2h_wins`, `diff_h2h_surface_wins` | wins against this opponent, overall and on this surface |
+| `diff_common_opp_win_rate` | win rate against opponents both players have faced (0 if there are none) |
+| `h2h_played`, `h2h_surface_played` | *symmetric:* previous meetings of the two players, overall and on this surface |
+| `common_opp_count` | *symmetric:* number of opponents both players have faced |
+| `has_serve_stats_a`, `has_serve_stats_b` | 1 if the player has at least one previous match with full serve stats |
+| `diff_first_in_pct`, `diff_first_won_pct`, `diff_second_won_pct` | career % of first serves in, and of first- and second-serve points won |
+| `diff_aces_per_match`, `diff_dfs_per_match` | career aces and double faults per match |
+| `diff_bp_saved_pct`, `diff_bp_saved_per_match`, `diff_bp_faced_per_match` | career break points saved %, and saved and faced per match |
+| `diff_sv_games_per_match` | career service games per match |
+| `diff_elo`, `diff_surface_elo` | Elo rating before the match, overall and on this surface |
+
+Serve averages use previous matches only, and only those with all nine serve stats present
+and `svpt > 0` (about 96% of matches). The current match's stats are added only after its
+features have been computed.
+
+Elo ratings start at 1500 and use the FiveThirtyEight-style K-factor K = 250 / (n + 5)^0.4,
+where n is the number of matches already rated. Surface Elo keeps a separate rating and
+match count for each surface. Every level counts the same: there is no Grand Slam multiplier
+and no decay for inactivity.
+
+In the parquet file the basic feature columns (rank points, height, hand, age) still contain NaN; history-based columns never do. `get_train_test` fills them with
 the **training-set median**, pooled over the `_a` and `_b` columns so the two rows of a match stay mirror images.
 This way no statistics from the test years leak into training.
 
