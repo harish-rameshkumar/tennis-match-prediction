@@ -55,12 +55,13 @@ def _side(matches: pd.DataFrame, prefix: str, side: str) -> pd.DataFrame:
     })
 
 
-def build_pairs(matches: pd.DataFrame) -> pd.DataFrame:
+def build_pairs(matches: pd.DataFrame, feats: pd.DataFrame | None = None) -> pd.DataFrame:
     """Two rows per match: winner as A (label 1), then loser as A (label 0).
 
     Feature columns keep NaN where data is missing; *_missing columns flag those cells.
     Imputation happens in get_train_test so that it only uses training-set statistics.
     hand is encoded 1.0 = left-handed, 0.0 = right-handed.
+    feats: output of tennis.features.compute_features for `matches` (computed if omitted).
     """
     common = matches[["match_id", "match_date", "year", "tour_level", "surface",
                       "tourney_name", "round"]].reset_index(drop=True)
@@ -80,13 +81,14 @@ def build_pairs(matches: pd.DataFrame) -> pd.DataFrame:
         for s in "ab":
             pairs[f"{f}_{s}_missing"] = pairs[f"{f}_{s}"].isna().astype(int)
 
-    pairs = pd.concat([pairs, _history_columns(matches, len(pairs))], axis=1)
+    if feats is None:
+        feats = compute_features(matches)
+    pairs = pd.concat([pairs, _history_columns(feats, len(pairs))], axis=1)
     return pairs[ID_COLUMNS + META_COLUMNS + FEATURE_COLUMNS]
 
 
-def _history_columns(matches: pd.DataFrame, n_rows: int) -> pd.DataFrame:
+def _history_columns(feats: pd.DataFrame, n_rows: int) -> pd.DataFrame:
     """Mirror tennis.features output onto the interleaved (won, lost) rows."""
-    feats = compute_features(matches)
     out = {}
     for f in DIFF_FEATURES:
         diff = feats[f"winner_{f}"].to_numpy() - feats[f"loser_{f}"].to_numpy()
@@ -117,14 +119,20 @@ def load_pairs(path=config.PAIRS_PATH) -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
-def _impute(train: pd.DataFrame, test: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Fill NaNs with the training median, pooled over the _a and _b columns."""
-    for f in IMPUTED_FEATURES:
+def train_medians(train: pd.DataFrame) -> dict[str, float]:
+    """Median of each imputed feature, pooled over its _a and _b columns.
+
+    Works on raw or already-filled training rows: filling with the median keeps the median.
+    """
+    return {f: train[[f"{f}_a", f"{f}_b"]].stack().median() for f in IMPUTED_FEATURES}
+
+
+def fill_missing(df: pd.DataFrame, medians: dict[str, float]) -> pd.DataFrame:
+    """Fill NaNs in the imputed features with `medians` (from train_medians), in place."""
+    for f, median in medians.items():
         cols = [f"{f}_a", f"{f}_b"]
-        median = train[cols].stack().median()
-        train[cols] = train[cols].fillna(median)
-        test[cols] = test[cols].fillna(median)
-    return train, test
+        df[cols] = df[cols].fillna(median)
+    return df
 
 
 def get_train_test(test_year: int = config.DEFAULT_TEST_YEAR, test_end_year: int | None = None,
@@ -144,7 +152,9 @@ def get_train_test(test_year: int = config.DEFAULT_TEST_YEAR, test_end_year: int
     train = pairs[pairs["year"] < test_year].copy()
     test = pairs[pairs["year"].between(test_year, test_end_year)
                  & pairs["tour_level"].isin(MAIN_TOUR_LEVELS)].copy()
-    train, test = _impute(train, test)
+    medians = train_medians(train)
+    fill_missing(train, medians)
+    fill_missing(test, medians)
     return train.reset_index(drop=True), test.reset_index(drop=True)
 
 
