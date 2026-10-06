@@ -182,6 +182,77 @@ def _update(w: PlayerState, l: PlayerState, winner_id: int, loser_id: int, day: 
     _record(l, winner_id, 0, day, surface, event, l_stats)
 
 
+def _one_match(w: PlayerState, l: PlayerState, winner_id: int, loser_id: int, day: int,
+               surface: str, event) -> tuple[list, list, list]:
+    """Pre-match features of one match from the two players' current states."""
+    common = _common_opponents(w, l, winner_id, loser_id)
+    return (_player_features(w, loser_id, common, day, surface, event),
+            _player_features(l, winner_id, common, day, surface, event),
+            _pair_features(w, loser_id, common, surface))
+
+
+def _to_frame(out_w, out_l, out_pair, index) -> pd.DataFrame:
+    cols_w = [f"winner_{f}" for f in PLAYER_FEATURES]
+    cols_l = [f"loser_{f}" for f in PLAYER_FEATURES]
+    frames = [pd.DataFrame(np.asarray(out_w, dtype=float).reshape(len(index), -1), index=index, columns=cols_w),
+              pd.DataFrame(np.asarray(out_l, dtype=float).reshape(len(index), -1), index=index, columns=cols_l),
+              pd.DataFrame(np.asarray(out_pair, dtype=float).reshape(len(index), -1), index=index,
+                           columns=PAIR_FEATURES)]
+    return pd.concat(frames, axis=1)
+
+
+def _day(dates) -> np.ndarray:
+    return np.asarray(dates, dtype="datetime64[D]").astype(np.int64)
+
+
+def _arrays(matches: pd.DataFrame) -> dict:
+    a = {
+        "winner": matches["winner_id"].to_numpy(),
+        "loser": matches["loser_id"].to_numpy(),
+        "day": _day(matches["match_date"].to_numpy()),
+        "tourney": matches["tourney_id"].to_numpy(),
+        "rnd": matches["round_order"].to_numpy(),
+        "surface": matches["surface"].to_numpy(),
+        "event": matches["tourney_id"].map(event_key).to_numpy(),
+        "w_stats": matches[[f"w_{s}" for s in SERVE_STATS]].to_numpy(float),
+        "l_stats": matches[[f"l_{s}" for s in SERVE_STATS]].to_numpy(float),
+    }
+    if (np.diff(a["day"]) < 0).any():
+        raise ValueError("matches must be sorted chronologically (use tennis.clean.clean)")
+    return a
+
+
+def replay(matches: pd.DataFrame) -> dict[int, PlayerState]:
+    """Player states after every match in `matches`, applied in row order.
+
+    This is the state compute_features holds at the end of the data, so features built
+    from it (see match_features) agree with the pipeline for a match on a later date.
+    """
+    a = _arrays(matches)
+    states: dict[int, PlayerState] = {}
+    for i in range(len(matches)):
+        w = states.get(a["winner"][i]) or states.setdefault(a["winner"][i], PlayerState())
+        l = states.get(a["loser"][i]) or states.setdefault(a["loser"][i], PlayerState())
+        _update(w, l, a["winner"][i], a["loser"][i], a["day"][i], a["surface"][i], a["event"][i],
+                a["w_stats"][i], a["l_stats"][i])
+    return states
+
+
+def match_features(states: dict[int, PlayerState], player_a: int, player_b: int, date,
+                   surface: str, tourney_id: str | None = None) -> pd.DataFrame:
+    """Features of one hypothetical match, A in the winner_ columns and B in loser_.
+
+    states comes from replay() over every match before `date`. Players missing from
+    states have no history (zeros, has_history = 0). Without tourney_id the
+    tournament-record features are 0. states is not modified.
+    """
+    a = states[player_a].copy() if player_a in states else PlayerState()
+    b = states[player_b].copy() if player_b in states else PlayerState()
+    event = event_key(tourney_id) if tourney_id else None
+    fa, fb, pair = _one_match(a, b, player_a, player_b, int(_day([date])[0]), surface, event)
+    return _to_frame([fa], [fb], [pair], pd.RangeIndex(1))
+
+
 def compute_features(matches: pd.DataFrame) -> pd.DataFrame:
     """Pre-match features for every match, aligned with matches.index.
 
@@ -190,17 +261,9 @@ def compute_features(matches: pd.DataFrame) -> pd.DataFrame:
     plus PAIR_FEATURES.
     """
     n = len(matches)
-    winner = matches["winner_id"].to_numpy()
-    loser = matches["loser_id"].to_numpy()
-    day = matches["match_date"].to_numpy().astype("datetime64[D]").astype(np.int64)
-    tourney = matches["tourney_id"].to_numpy()
-    rnd = matches["round_order"].to_numpy()
-    surface = matches["surface"].to_numpy()
-    event = matches["tourney_id"].map(event_key).to_numpy()
-    w_stats = matches[[f"w_{s}" for s in SERVE_STATS]].to_numpy(float)
-    l_stats = matches[[f"l_{s}" for s in SERVE_STATS]].to_numpy(float)
-    if (np.diff(day) < 0).any():
-        raise ValueError("matches must be sorted chronologically (use tennis.clean.clean)")
+    arrays = _arrays(matches)
+    winner, loser, day, tourney, rnd = (arrays[k] for k in ("winner", "loser", "day", "tourney", "rnd"))
+    surface, event, w_stats, l_stats = (arrays[k] for k in ("surface", "event", "w_stats", "l_stats"))
 
     out_w, out_l, out_pair = [None] * n, [None] * n, [None] * n
     base: dict[int, PlayerState] = {}
@@ -214,11 +277,8 @@ def compute_features(matches: pd.DataFrame) -> pd.DataFrame:
                 end += 1
             block = positions[start:end]
             for i in block:
-                w, l = state(winner[i]), state(loser[i])
-                common = _common_opponents(w, l, winner[i], loser[i])
-                out_w[i] = _player_features(w, loser[i], common, day[i], surface[i], event[i])
-                out_l[i] = _player_features(l, winner[i], common, day[i], surface[i], event[i])
-                out_pair[i] = _pair_features(w, loser[i], common, surface[i])
+                out_w[i], out_l[i], out_pair[i] = _one_match(
+                    state(winner[i]), state(loser[i]), winner[i], loser[i], day[i], surface[i], event[i])
             for i in block:
                 _update(state(winner[i]), state(loser[i]), winner[i], loser[i], day[i],
                         surface[i], event[i], w_stats[i], l_stats[i])
@@ -264,9 +324,4 @@ def compute_features(matches: pd.DataFrame) -> pd.DataFrame:
             _update(base_state(winner[i]), base_state(loser[i]), winner[i], loser[i], day[i],
                     surface[i], event[i], w_stats[i], l_stats[i])
 
-    cols_w = [f"winner_{f}" for f in PLAYER_FEATURES]
-    cols_l = [f"loser_{f}" for f in PLAYER_FEATURES]
-    frames = [pd.DataFrame(np.asarray(out_w, dtype=float), index=matches.index, columns=cols_w),
-              pd.DataFrame(np.asarray(out_l, dtype=float), index=matches.index, columns=cols_l),
-              pd.DataFrame(np.asarray(out_pair, dtype=float), index=matches.index, columns=PAIR_FEATURES)]
-    return pd.concat(frames, axis=1)
+    return _to_frame(out_w, out_l, out_pair, matches.index)

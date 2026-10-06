@@ -38,7 +38,10 @@ pinned to commit `83733587`. Every file is checked against [data/SHA256SUMS](dat
 ```bash
 python scripts/download_data.py    # ~40 MB into data/raw/, verified
 python -m tennis.dataset           # builds data/processed/pairs.parquet (~20 s)
-pytest                             # dataset tests
+pytest                             # all tests (~1 min)
+
+# EDA notebook (figures are already saved in it; this re-runs it from the raw data, ~20 s)
+jupyter nbconvert --to notebook --execute --inplace notebooks/01_eda.ipynb
 ```
 
 `data/raw/` and `data/processed/` are gitignored.
@@ -161,6 +164,57 @@ To evaluate one prediction per match, combine the two rows: P(A wins) =
 | --- | --- | --- |
 | `get_train_test()` | 263,124 rows (131,562 matches, 1997–2018) | 5,194 rows (2,597 matches) |
 | `get_train_test(2023, 2024)` | 339,630 rows (169,815 matches, 1997–2022) | 10,928 rows (5,464 matches) |
+
+### Inference interface ([src/tennis/inference.py](src/tennis/inference.py))
+
+`build_match_rows(...)` returns the feature rows for a match that isn't in the data, built with
+the **same code** as the training rows: `replay` and `match_features` from `features.py`, and
+`build_pairs` and `fill_missing` from `dataset.py`.
+
+```python
+from tennis.dataset import FEATURE_COLUMNS, get_train_test, train_medians
+from tennis.inference import History, build_match_rows, combine, load_history
+
+train, _ = get_train_test()                      # whatever the model was trained on
+medians = train_medians(train)                   # same fill values as get_train_test
+history = History(load_history())                # all data as history (~4 s); build once and reuse
+
+rows = build_match_rows("Novak Djokovic", "Carlos Alcaraz", "Grass", "2025-07-01", history,
+                        tournament="Wimbledon", medians=medians)
+p_ab, p_ba = model.predict_proba(rows[FEATURE_COLUMNS])[:, 1]
+p_djokovic = combine(p_ab, p_ba)                 # ½·(p(A,B) + 1 − p(B,A))
+```
+
+`build_match_rows(player_a, player_b, surface, date, history, *, tournament=None, tour_level=None, attributes=None, medians=None)`
+
+**Returns** a DataFrame with 2 rows: row 0 is (A, B) and row 1 is (B, A).
+- Its columns are those of `pairs.parquet` without `label` (`tennis.inference.OUTPUT_COLUMNS`), so
+  `rows[FEATURE_COLUMNS]` feeds straight into a model trained on `get_train_test` output.
+- Every `diff_*` value in row 1 is the exact negative of row 0.
+- `build_match_row(...)` takes the same arguments and returns only row 0.
+
+**Arguments:**
+
+| Argument | Meaning |
+| --- | --- |
+| `player_a`, `player_b` | Player id, or a name. Names are case- and accent-insensitive, and a unique partial name works (`"carlos alcaraz"`, `"Federer"`). An unknown name raises `UnknownPlayerError`, whose `.suggestions` holds close matches (`"Novak Djokovc"` → Novak Djokovic). A name that fits several players raises `AmbiguousPlayerError` with `.candidates` (`"Murray"` → Andy, Jamie, Jack). |
+| `surface` | `"Hard"`, `"Clay"`, `"Grass"` or `"Carpet"` |
+| `date` | Match date. History is every match **strictly before** this date. |
+| `history` | A `History`, or a DataFrame of cleaned matches (`load_history()`), in which case `History(matches, before=date)` is built (~1–2 s). `History(matches)` with no cutoff uses all data and suits predictions after the data ends (2024-12-18). A `History` whose cutoff is later than `date` raises `ValueError`, because it would include future matches. |
+| `tournament` | `tourney_id` or tournament name (latest edition). It drives the `tourney_*` features, which are 0 without it. |
+| `attributes` | Overrides such as `{"rank_a": 2, "rank_points_b": 9000, "hand_a": "L", "height_b": 183, "age_a": 37.1}` |
+| `medians` | From `train_medians(train)`. NaNs are then filled exactly as in `get_train_test`. Without it, rows keep NaN plus the `*_missing` flags, like `pairs.parquet`. |
+
+**Defaults for rank, points, height, hand and age** come from each player's latest match
+before `date`, with age advanced to `date`. A rank is required for both players: if a player
+has no earlier match, pass `attributes={"rank_a": ...}`. A player with no history gets
+`has_history = 0` and zeros, exactly as in the pipeline.
+
+**Verified:** [tests/test_inference.py](tests/test_inference.py) rebuilds 20 real matches from the
+history before their date and gets exactly the stored `pairs.parquet` rows. The test uses
+matches where neither player had played an earlier round of the same tournament: for later
+rounds, the pipeline also counts the earlier rounds of that tournament, which a "before this
+date" query can't see.
 
 ## Usage
 
