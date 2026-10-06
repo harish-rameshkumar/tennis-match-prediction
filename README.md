@@ -37,7 +37,7 @@ pinned to commit `83733587`. Every file is checked against [data/SHA256SUMS](dat
 
 ```bash
 python scripts/download_data.py    # ~40 MB into data/raw/, verified
-python -m tennis.dataset           # builds data/processed/pairs.parquet (~15 s)
+python -m tennis.dataset           # builds data/processed/pairs.parquet (~20 s)
 pytest                             # dataset tests
 ```
 
@@ -119,10 +119,16 @@ Naming conventions:
 | `diff_aces_per_match`, `diff_dfs_per_match` | career aces and double faults per match |
 | `diff_bp_saved_pct`, `diff_bp_saved_per_match`, `diff_bp_faced_per_match` | career break points saved %, and saved and faced per match |
 | `diff_sv_games_per_match` | career service games per match |
+| `diff_elo`, `diff_surface_elo` | Elo rating before the match, overall and on this surface |
 
 Serve averages use previous matches only, and only those with all nine serve stats present
 and `svpt > 0` (about 96% of matches). The current match's stats are added only after its
 features have been computed.
+
+Elo ratings start at 1500 and use the FiveThirtyEight-style K-factor K = 250 / (n + 5)^0.4,
+where n is the number of matches already rated. Surface Elo keeps a separate rating and
+match count for each surface. Every level counts the same: there is no Grand Slam multiplier
+and no decay for inactivity.
 
 In the parquet file the basic feature columns (rank points, height, hand, age) still contain NaN; history-based columns never do. `get_train_test` fills them with
 the **training-set median**, pooled over the `_a` and `_b` columns so the two rows of a match stay mirror images.

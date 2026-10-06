@@ -22,6 +22,7 @@ RECENT_DAYS = 30
 # Sackmann serve-stat columns (w_<stat> for the winner, l_<stat> for the loser).
 SERVE_STATS = ["svpt", "1stIn", "1stWon", "2ndWon", "ace", "df", "SvGms", "bpSaved", "bpFaced"]
 SVPT, FIRST_IN, FIRST_WON, SECOND_WON, ACE, DF, SV_GMS, BP_SAVED, BP_FACED = range(len(SERVE_STATS))
+ELO_START = 1500.0
 
 # Per-player features. The pairs table holds diff_<name> = A - B for each.
 DIFF_FEATURES = (
@@ -34,6 +35,7 @@ DIFF_FEATURES = (
     + ["h2h_wins", "h2h_surface_wins", "common_opp_win_rate"]
     + ["first_in_pct", "first_won_pct", "second_won_pct", "aces_per_match", "dfs_per_match",
        "bp_saved_pct", "bp_saved_per_match", "bp_faced_per_match", "sv_games_per_match"]
+    + ["elo", "surface_elo"]
 )
 # Per-player flags, kept as <name>_a / <name>_b.
 FLAG_FEATURES = ["has_history", "has_serve_stats"]
@@ -55,7 +57,7 @@ def _rate(wins, played) -> float:
 
 class PlayerState:
     __slots__ = ("wins", "played", "results", "recent", "surface", "surface_results", "event",
-                 "opp", "opp_surface", "serve", "serve_matches")
+                 "opp", "opp_surface", "serve", "serve_matches", "elo", "surface_elo")
 
     def __init__(self):
         self.wins = 0
@@ -69,6 +71,8 @@ class PlayerState:
         self.opp_surface = {}                       # (opponent id, surface) -> [wins, played]
         self.serve = [0.0] * len(SERVE_STATS)       # career sums over matches with full stats
         self.serve_matches = 0
+        self.elo = [ELO_START, 0]                   # [rating, matches rated]
+        self.surface_elo = {}                       # surface -> [rating, matches rated]
 
     def copy(self) -> "PlayerState":
         c = PlayerState()
@@ -81,6 +85,8 @@ class PlayerState:
         c.opp = {k: v.copy() for k, v in self.opp.items()}
         c.opp_surface = {k: v.copy() for k, v in self.opp_surface.items()}
         c.serve, c.serve_matches = self.serve.copy(), self.serve_matches
+        c.elo = self.elo.copy()
+        c.surface_elo = {k: v.copy() for k, v in self.surface_elo.items()}
         return c
 
 
@@ -120,6 +126,7 @@ def _player_features(p: PlayerState, opp_id: int, common: set, day: int, surface
             _rate(t[SECOND_WON], t[SVPT] - t[FIRST_IN]), _rate(t[ACE], n), _rate(t[DF], n),
             _rate(t[BP_SAVED], t[BP_FACED]), _rate(t[BP_SAVED], n), _rate(t[BP_FACED], n),
             _rate(t[SV_GMS], n)]
+    out += [p.elo[0], p.surface_elo.get(surface, (ELO_START, 0))[0]]
     return out
 
 
@@ -152,8 +159,25 @@ def _record(p: PlayerState, opp_id: int, won: int, day: int, surface: str, event
         p.serve_matches += 1
 
 
+def _elo_k(n: int) -> float:
+    """FiveThirtyEight-style K-factor: large for newcomers, shrinking with experience."""
+    return 250.0 / (n + 5) ** 0.4
+
+
+def _elo_update(w: list, l: list) -> None:
+    """Update [rating, matches] of winner w and loser l in place."""
+    expected = 1.0 / (1.0 + 10 ** ((l[0] - w[0]) / 400.0))
+    w[0] += _elo_k(w[1]) * (1 - expected)
+    l[0] -= _elo_k(l[1]) * (1 - expected)
+    w[1] += 1
+    l[1] += 1
+
+
 def _update(w: PlayerState, l: PlayerState, winner_id: int, loser_id: int, day: int,
             surface: str, event: str, w_stats: np.ndarray, l_stats: np.ndarray) -> None:
+    _elo_update(w.elo, l.elo)
+    _elo_update(w.surface_elo.setdefault(surface, [ELO_START, 0]),
+                l.surface_elo.setdefault(surface, [ELO_START, 0]))
     _record(w, loser_id, 1, day, surface, event, w_stats)
     _record(l, winner_id, 0, day, surface, event, l_stats)
 
