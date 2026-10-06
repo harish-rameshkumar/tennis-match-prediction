@@ -114,6 +114,15 @@ Naming conventions:
 | `diff_common_opp_win_rate` | win rate against opponents both players have faced (0 if there are none) |
 | `h2h_played`, `h2h_surface_played` | *symmetric:* previous meetings of the two players, overall and on this surface |
 | `common_opp_count` | *symmetric:* number of opponents both players have faced |
+| `has_serve_stats_a`, `has_serve_stats_b` | 1 if the player has at least one previous match with full serve stats |
+| `diff_first_in_pct`, `diff_first_won_pct`, `diff_second_won_pct` | career % of first serves in, and of first- and second-serve points won |
+| `diff_aces_per_match`, `diff_dfs_per_match` | career aces and double faults per match |
+| `diff_bp_saved_pct`, `diff_bp_saved_per_match`, `diff_bp_faced_per_match` | career break points saved %, and saved and faced per match |
+| `diff_sv_games_per_match` | career service games per match |
+
+Serve averages use previous matches only, and only those with all nine serve stats present
+and `svpt > 0` (about 96% of matches). The current match's stats are added only after its
+features have been computed.
 
 In the parquet file the basic feature columns (rank points, height, hand, age) still contain NaN; history-based columns never do. `get_train_test` fills them with
 the **training-set median**, pooled over the `_a` and `_b` columns so the two rows of a match stay mirror images.

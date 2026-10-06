@@ -19,6 +19,9 @@ import pandas as pd
 
 WINDOWS = (5, 10, 15, 25)
 RECENT_DAYS = 30
+# Sackmann serve-stat columns (w_<stat> for the winner, l_<stat> for the loser).
+SERVE_STATS = ["svpt", "1stIn", "1stWon", "2ndWon", "ace", "df", "SvGms", "bpSaved", "bpFaced"]
+SVPT, FIRST_IN, FIRST_WON, SECOND_WON, ACE, DF, SV_GMS, BP_SAVED, BP_FACED = range(len(SERVE_STATS))
 
 # Per-player features. The pairs table holds diff_<name> = A - B for each.
 DIFF_FEATURES = (
@@ -29,9 +32,11 @@ DIFF_FEATURES = (
     + [f"surface_last{k}_{s}" for k in WINDOWS for s in ("played", "win_rate")]
     + ["tourney_wins", "tourney_losses"]
     + ["h2h_wins", "h2h_surface_wins", "common_opp_win_rate"]
+    + ["first_in_pct", "first_won_pct", "second_won_pct", "aces_per_match", "dfs_per_match",
+       "bp_saved_pct", "bp_saved_per_match", "bp_faced_per_match", "sv_games_per_match"]
 )
 # Per-player flags, kept as <name>_a / <name>_b.
-FLAG_FEATURES = ["has_history"]
+FLAG_FEATURES = ["has_history", "has_serve_stats"]
 # Symmetric pair features (same value in both mirrored rows).
 PAIR_FEATURES = ["h2h_played", "h2h_surface_played", "common_opp_count"]
 
@@ -50,7 +55,7 @@ def _rate(wins, played) -> float:
 
 class PlayerState:
     __slots__ = ("wins", "played", "results", "recent", "surface", "surface_results", "event",
-                 "opp", "opp_surface")
+                 "opp", "opp_surface", "serve", "serve_matches")
 
     def __init__(self):
         self.wins = 0
@@ -62,6 +67,8 @@ class PlayerState:
         self.event = {}                             # event key -> [wins, played]
         self.opp = {}                               # opponent id -> [wins, played]
         self.opp_surface = {}                       # (opponent id, surface) -> [wins, played]
+        self.serve = [0.0] * len(SERVE_STATS)       # career sums over matches with full stats
+        self.serve_matches = 0
 
     def copy(self) -> "PlayerState":
         c = PlayerState()
@@ -73,6 +80,7 @@ class PlayerState:
         c.event = {k: v.copy() for k, v in self.event.items()}
         c.opp = {k: v.copy() for k, v in self.opp.items()}
         c.opp_surface = {k: v.copy() for k, v in self.opp_surface.items()}
+        c.serve, c.serve_matches = self.serve.copy(), self.serve_matches
         return c
 
 
@@ -90,7 +98,8 @@ def _player_features(p: PlayerState, opp_id: int, common: set, day: int, surface
     s_results = p.surface_results.get(surface, ())
     e_wins, e_played = p.event.get(event, (0, 0))
 
-    out = [int(p.played > 0), p.wins, p.played - p.wins, _rate(p.wins, p.played)]
+    out = [int(p.played > 0), int(p.serve_matches > 0)]  # FLAG_FEATURES first
+    out += [p.wins, p.played - p.wins, _rate(p.wins, p.played)]
     for k in WINDOWS:
         out += _last(p.results, k)
     out += [sum(recent), len(recent) - sum(recent)]
@@ -105,6 +114,12 @@ def _player_features(p: PlayerState, opp_id: int, common: set, day: int, surface
         c_played += p.opp[c][1]
     out += [p.opp.get(opp_id, (0, 0))[0], p.opp_surface.get((opp_id, surface), (0, 0))[0],
             _rate(c_wins, c_played)]
+
+    t, n = p.serve, p.serve_matches
+    out += [_rate(t[FIRST_IN], t[SVPT]), _rate(t[FIRST_WON], t[FIRST_IN]),
+            _rate(t[SECOND_WON], t[SVPT] - t[FIRST_IN]), _rate(t[ACE], n), _rate(t[DF], n),
+            _rate(t[BP_SAVED], t[BP_FACED]), _rate(t[BP_SAVED], n), _rate(t[BP_FACED], n),
+            _rate(t[SV_GMS], n)]
     return out
 
 
@@ -117,7 +132,8 @@ def _common_opponents(w: PlayerState, l: PlayerState, winner_id: int, loser_id: 
     return (w.opp.keys() & l.opp.keys()) - {winner_id, loser_id}
 
 
-def _record(p: PlayerState, opp_id: int, won: int, day: int, surface: str, event: str) -> None:
+def _record(p: PlayerState, opp_id: int, won: int, day: int, surface: str, event: str,
+            stats: np.ndarray) -> None:
     p.wins += won
     p.played += 1
     p.results.append(won)
@@ -130,12 +146,16 @@ def _record(p: PlayerState, opp_id: int, won: int, day: int, surface: str, event
                    p.opp_surface.setdefault((opp_id, surface), [0, 0])):
         record[0] += won
         record[1] += 1
+    # Only matches with every stat present (and svpt > 0) count towards serve averages.
+    if stats[SVPT] > 0 and not np.isnan(stats).any():
+        p.serve = [a + b for a, b in zip(p.serve, stats.tolist())]
+        p.serve_matches += 1
 
 
 def _update(w: PlayerState, l: PlayerState, winner_id: int, loser_id: int, day: int,
-            surface: str, event: str) -> None:
-    _record(w, loser_id, 1, day, surface, event)
-    _record(l, winner_id, 0, day, surface, event)
+            surface: str, event: str, w_stats: np.ndarray, l_stats: np.ndarray) -> None:
+    _record(w, loser_id, 1, day, surface, event, w_stats)
+    _record(l, winner_id, 0, day, surface, event, l_stats)
 
 
 def compute_features(matches: pd.DataFrame) -> pd.DataFrame:
@@ -153,6 +173,8 @@ def compute_features(matches: pd.DataFrame) -> pd.DataFrame:
     rnd = matches["round_order"].to_numpy()
     surface = matches["surface"].to_numpy()
     event = matches["tourney_id"].map(event_key).to_numpy()
+    w_stats = matches[[f"w_{s}" for s in SERVE_STATS]].to_numpy(float)
+    l_stats = matches[[f"l_{s}" for s in SERVE_STATS]].to_numpy(float)
     if (np.diff(day) < 0).any():
         raise ValueError("matches must be sorted chronologically (use tennis.clean.clean)")
 
@@ -175,7 +197,7 @@ def compute_features(matches: pd.DataFrame) -> pd.DataFrame:
                 out_pair[i] = _pair_features(w, loser[i], common, surface[i])
             for i in block:
                 _update(state(winner[i]), state(loser[i]), winner[i], loser[i], day[i],
-                        surface[i], event[i])
+                        surface[i], event[i], w_stats[i], l_stats[i])
             start = end
 
     def base_state(pid):
@@ -216,7 +238,7 @@ def compute_features(matches: pd.DataFrame) -> pd.DataFrame:
             run_tournament(positions, local_state)
         for i in range(lo, hi):
             _update(base_state(winner[i]), base_state(loser[i]), winner[i], loser[i], day[i],
-                    surface[i], event[i])
+                    surface[i], event[i], w_stats[i], l_stats[i])
 
     cols_w = [f"winner_{f}" for f in PLAYER_FEATURES]
     cols_l = [f"loser_{f}" for f in PLAYER_FEATURES]
