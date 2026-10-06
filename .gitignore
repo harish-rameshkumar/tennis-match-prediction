@@ -6,3 +6,4 @@ models/*.joblib
 __pycache__/
 *.egg-info/
 .pytest_cache/
+notebooks/*.html

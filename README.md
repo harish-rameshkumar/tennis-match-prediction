@@ -5,46 +5,148 @@ Pre-match winner prediction for ATP singles matches using machine learning, repr
 
 **Course:** UE24CS352A – Machine Learning, Mini-Project
 
-## Team
+## Setup and run
 
-| Name | SRN |
-| --- | --- |
-| Harish Ramesh Kumar | PES1UG24AM111 |
-| Jayant Mahishi | PES1UG24AM122 |
+### Requirements
 
-## Setup
+- **Python 3.13** (developed and tested on 3.13.0). Use a plain `venv`, not a conda base environment.
+- **macOS or Linux** (tested on macOS 27, Apple Silicon).
+- **Disk:** about 90 MB of data (40 MB raw CSVs plus 48 MB `pairs.parquet`) and about
+  700 MB for the virtual environment.
+- **Time** (measured on a fresh clone, MacBook Air, Apple Silicon): `pip install` 25 s with a
+  warm pip cache (longer the first time, when every package has to download), data download
+  30 s, building `pairs.parquet` 23 s, tests 65 s, EDA notebook export 7 s.
 
-Requires Python 3.11+ (developed on 3.13, macOS arm64). Do not use a conda base environment.
+### Setup
 
 ```bash
+git clone https://github.com/harish-rameshkumar/tennis-match-prediction.git
+cd tennis-match-prediction
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-pip install -e .                   # makes `import tennis` work from anywhere
 ```
 
-## Data
+`requirements.txt` pins every package version and also installs this project (`-e .`), so
+`import tennis` works from scripts, tests and notebooks. Check with `python --version`
+that the venv uses Python 3.13.
 
-The data is Jeff Sackmann's ATP match data (CC BY-NC-SA 4.0). His original
-`JeffSackmann/tennis_atp` GitHub repo is no longer available, so we download it from the
-archival mirror [`Aneeshers/tennis-sackmann-archive`](https://github.com/Aneeshers/tennis-sackmann-archive),
-pinned to commit `83733587`. Every file is checked against [data/SHA256SUMS](data/SHA256SUMS).
+### Run steps
+
+Run these from the repository root with the venv activated, in this order.
+
+**1. Download and verify the data**
+
+```bash
+python scripts/download_data.py
+```
+
+Downloads 43 CSVs (about 40 MB) into `data/raw/` and checks each one against
+`data/SHA256SUMS`. It prints one `downloaded …` line per file, then
+`all 43 files present and verified`. Running it again skips files that are already there.
+
+**2. Build the pairs table**
+
+```bash
+python -m tennis.dataset
+```
+
+Cleans the matches and computes every feature. Expect
+`wrote …/data/processed/pairs.parquet: 393560 rows x 77 columns (196780 matches)`.
+
+**3. Run the tests**
+
+```bash
+pytest
+```
+
+Expect `29 passed`. The tests need steps 1 and 2 first; without the data they are reported as
+skipped, not passed.
+
+**4. Open the EDA notebook**
+
+```bash
+jupyter nbconvert --to html --execute notebooks/01_eda.ipynb
+open notebooks/01_eda.html          # Linux: xdg-open notebooks/01_eda.html
+```
+
+Re-runs the notebook from the raw data and writes `notebooks/01_eda.html` (gitignored),
+then opens it in the browser. The committed notebook already has its figures, so you can
+also just open `notebooks/01_eda.ipynb` in VS Code or on GitHub. In VS Code, pick the
+`.venv` kernel.
+
+**Shortcuts:** the [Makefile](Makefile) wraps the same commands. Run it with the venv activated.
+
+| Command | Same as |
+| --- | --- |
+| `make data` | `python scripts/download_data.py` |
+| `make features` | `make data`, then `python -m tennis.dataset` |
+| `make test` | `pytest` |
+| `make clean` | deletes `data/processed/`, caches and the exported notebook HTML (keeps `data/raw/`) |
+
+### Models and demo
+
+> **TODO (Jayant):** fill in the real commands when the code lands. Nothing below exists yet.
+
+| Stage | Command | What it does / expected output |
+| --- | --- | --- |
+| Train and evaluate | _TODO_ | _TODO_ |
+| Streamlit app | _TODO_ | _TODO_ |
+| CLI demo | _TODO_ | _TODO_ |
+| Results notebook (`notebooks/02_results.ipynb`) | _TODO_ | _TODO_ |
+
+The models use `get_train_test` ([Dataset interface](#dataset-interface)), and the demo uses
+`build_match_rows` ([Inference interface](#inference-interface-srctennisinferencepy)).
+
+### Repository layout
+
+```
+tennis-match-prediction/
+├── README.md
+├── Makefile                 # shortcuts: data, features, test, clean
+├── requirements.txt         # pinned dependencies + this package (-e .)
+├── pyproject.toml           # package metadata for src/tennis and pytest settings
+├── data/
+│   ├── SHA256SUMS           # checksums of the 43 raw CSVs (committed)
+│   ├── raw/                 # downloaded CSVs (gitignored)
+│   └── processed/           # pairs.parquet (gitignored)
+├── scripts/
+│   └── download_data.py     # pinned, checksum-verified download
+├── src/tennis/
+│   ├── config.py            # paths, year ranges, mirror commit
+│   ├── load.py              # read the raw CSVs
+│   ├── clean.py             # cleaning rules
+│   ├── features.py          # history-based features (form, head-to-head, serve, Elo)
+│   ├── dataset.py           # pairs.parquet, FEATURE_COLUMNS, get_train_test
+│   └── inference.py         # feature rows for a new match (used by the demo)
+├── tests/                   # dataset, leakage, symmetry and inference tests
+└── notebooks/
+    └── 01_eda.ipynb         # exploratory data analysis
+```
+
+### Team
+
+| Name | SRN | Owns |
+| --- | --- | --- |
+| Harish Ramesh Kumar | PES1UG24AM111 | data pipeline, features, inference, EDA |
+| Jayant Mahishi | PES1UG24AM122 | models, evaluation, `predict.py`, Streamlit app, results notebook |
+
+### Data source and licence
+
+The data is Jeff Sackmann's [`tennis_atp`](https://github.com/JeffSackmann/tennis_atp) ATP match
+data, released under **CC BY-NC-SA 4.0** (attribution, non-commercial, share-alike). The original
+repository is no longer available on GitHub, so we download it from the archival mirror
+[`Aneeshers/tennis-sackmann-archive`](https://github.com/Aneeshers/tennis-sackmann-archive),
+pinned to commit `83733587353df8a41f2fd4f516147d5aa83f5a8d`. Every file we use matches the
+mirror's own record of that commit (git blob hashes), and the download is checked against
+[data/SHA256SUMS](data/SHA256SUMS).
 
 | Files | Years | Used for |
 | --- | --- | --- |
 | `atp_matches_YYYY.csv` | 1997–2024 | ATP main tour (incl. Davis Cup) |
 | `atp_matches_qual_chall_YYYY.csv` | 2010–2024 | Challengers and ATP qualifying |
 
-```bash
-python scripts/download_data.py    # ~40 MB into data/raw/, verified
-python -m tennis.dataset           # builds data/processed/pairs.parquet (~20 s)
-pytest                             # all tests (~1 min)
-
-# EDA notebook (figures are already saved in it; this re-runs it from the raw data, ~20 s)
-jupyter nbconvert --to notebook --execute --inplace notebooks/01_eda.ipynb
-```
-
-`data/raw/` and `data/processed/` are gitignored.
+## Data
 
 ### Cleaning rules ([src/tennis/clean.py](src/tennis/clean.py))
 
@@ -215,10 +317,6 @@ history before their date and gets exactly the stored `pairs.parquet` rows. The 
 matches where neither player had played an earlier round of the same tournament: for later
 rounds, the pipeline also counts the earlier rounds of that tournament, which a "before this
 date" query can't see.
-
-## Usage
-
-_TODO_
 
 ## Results
 
