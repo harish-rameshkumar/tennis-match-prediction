@@ -38,7 +38,10 @@ pinned to commit `83733587`. Every file is checked against [data/SHA256SUMS](dat
 ```bash
 python scripts/download_data.py    # ~40 MB into data/raw/, verified
 python -m tennis.dataset           # builds data/processed/pairs.parquet (~20 s)
-pytest                             # dataset tests
+pytest                             # all tests (~1 min)
+
+# EDA notebook (figures are already saved in it; this re-runs it from the raw data, ~20 s)
+jupyter nbconvert --to notebook --execute --inplace notebooks/01_eda.ipynb
 ```
 
 `data/raw/` and `data/processed/` are gitignored.
