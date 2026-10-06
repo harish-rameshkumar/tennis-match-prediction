@@ -160,7 +160,7 @@ def sample_matches(m: pd.DataFrame) -> list:
 
     idx = (pick(m.index, 30)
            + pick(m.index[m["round"] == "F"], 6)
-           + pick(m.index[m["round"] == "RR"], 6)
+           + pick(m.index[m["round"] == "RR"], 12)  # only RR can expose same-round leaks
            + pick(same_date_other_event, 10)
            + pick(first_ever, 4))
     return sorted(set(idx))
