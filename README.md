@@ -37,7 +37,7 @@ pinned to commit `83733587`. Every file is checked against [data/SHA256SUMS](dat
 
 ```bash
 python scripts/download_data.py    # ~40 MB into data/raw/, verified
-python -m tennis.dataset           # builds data/processed/pairs.parquet (~6 s)
+python -m tennis.dataset           # builds data/processed/pairs.parquet (~15 s)
 pytest                             # dataset tests
 ```
 
@@ -110,6 +110,10 @@ Naming conventions:
 | `diff_surface_wins`, `diff_surface_losses`, `diff_surface_win_rate` | career record on this match's surface |
 | `diff_surface_last{5,10,15,25}_played`, `diff_surface_last{5,10,15,25}_win_rate` | the same last-N form, on this surface only |
 | `diff_tourney_wins`, `diff_tourney_losses` | record at this event in any year, including earlier rounds this year |
+| `diff_h2h_wins`, `diff_h2h_surface_wins` | wins against this opponent, overall and on this surface |
+| `diff_common_opp_win_rate` | win rate against opponents both players have faced (0 if there are none) |
+| `h2h_played`, `h2h_surface_played` | *symmetric:* previous meetings of the two players, overall and on this surface |
+| `common_opp_count` | *symmetric:* number of opponents both players have faced |
 
 In the parquet file the basic feature columns (rank points, height, hand, age) still contain NaN; history-based columns never do. `get_train_test` fills them with
 the **training-set median**, pooled over the `_a` and `_b` columns so the two rows of a match stay mirror images.
