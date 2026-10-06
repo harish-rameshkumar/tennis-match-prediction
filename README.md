@@ -13,8 +13,9 @@ Pre-match winner prediction for ATP singles matches using machine learning, repr
 - **macOS or Linux** (tested on macOS 27, Apple Silicon).
 - **Disk:** about 90 MB of data (40 MB raw CSVs plus 48 MB `pairs.parquet`) and about
   700 MB for the virtual environment.
-- **Time** (MacBook Air M-series, fresh clone): about 1 min for `pip install`, 10 s for the
-  data download, 20 s to build `pairs.parquet`, 1 min for the tests and 20 s for the EDA notebook.
+- **Time** (measured on a fresh clone, MacBook Air, Apple Silicon): `pip install` 25 s with a
+  warm pip cache (longer the first time, when every package has to download), data download
+  30 s, building `pairs.parquet` 23 s, tests 65 s, EDA notebook export 7 s.
 
 ### Setup
 
