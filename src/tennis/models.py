@@ -33,7 +33,7 @@ MODEL_NAMES = ("rank_baseline", "logreg", "rf", "linear_svc", "hgb")
 # --------------------------------------------------------------------------
 def feature_columns() -> list[str]:
     """Use the team's FEATURE_COLUMNS list; never hardcode feature names."""
-     for mod in ("tennis.dataset", "tennis.features"):
+    for mod in ("tennis.dataset", "tennis.features"):
         try:
             return list(getattr(__import__(mod, fromlist=["FEATURE_COLUMNS"]),
                                 "FEATURE_COLUMNS"))
