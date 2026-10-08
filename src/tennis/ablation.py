@@ -60,14 +60,20 @@ def assign_groups(columns) -> dict[str, list[str]]:
     return {g: cols for g, cols in groups.items() if cols}
 
 
-def _eval(name, features, train, test, Xtr_full=None):
+def _eval(name, features, train, test):
     Xtr, ytr = get_xy(train, features)
     Xte, _ = get_xy(test, features)
     model = build_model(name, Xtr).fit(Xtr, ytr)
-    m = match_metrics(score_matches(model, test, Xte)["p_win"])
+    pt = score_matches(model, test, Xte)["p_win"].to_numpy()
+    m = match_metrics(pt)
     se = (m["accuracy"] * (1 - m["accuracy"]) / m["n_matches"]) ** 0.5
+    tie = np.isclose(pt, 0.5, rtol=0, atol=1e-9)        # model has no opinion
+    ptr = score_matches(model, train, Xtr)["p_win"].to_numpy()
     return {"n_features": len(features), "accuracy": m["accuracy"],
-            "acc_ci95": 1.96 * se, "log_loss": m["log_loss"], "brier": m["brier"]}
+            "acc_ci95": 1.96 * se, "log_loss": m["log_loss"], "brier": m["brier"],
+            "train_accuracy": match_metrics(ptr)["accuracy"],
+            "tie_rate": float(tie.mean()),
+            "acc_decided": float((pt[~tie] > 0.5).mean()) if (~tie).any() else float("nan")}
 
 
 def run_ablation(model="logreg", test_years=None, out_dir="results", fig_dir="reports/figures"):
@@ -83,7 +89,9 @@ def run_ablation(model="logreg", test_years=None, out_dir="results", fig_dir="re
         r = _eval(model, feats, train, test)
         rows.append({"model": model, "test_year": tag, "kind": kind, "group": group, **r})
         print(f"{kind:9s} {group:13s} n={r['n_features']:3d} acc {r['accuracy']:.3%} "
-              f"(+/-{r['acc_ci95']:.1%}) log-loss {r['log_loss']:.4f}")
+              f"(+/-{r['acc_ci95']:.1%}) log-loss {r['log_loss']:.4f} | "
+              f"train {r['train_accuracy']:.3%} ties {r['tie_rate']:.0%} "
+              f"acc-on-decided {r['acc_decided']:.3%}")
 
     add("all", "all", cols)
     for g, gc in groups.items():

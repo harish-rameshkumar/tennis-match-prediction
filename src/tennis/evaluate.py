@@ -68,7 +68,8 @@ def match_metrics(p_win, probabilistic: bool = True) -> dict:
     class", so the winner-oriented form is exact.
     """
     p_win = np.asarray(p_win, float)
-    acc = float(np.mean((p_win > 0.5) + 0.5 * (p_win == 0.5)))
+    tie = np.isclose(p_win, 0.5, rtol=0, atol=1e-9)
+    acc = float(np.mean(((p_win > 0.5) & ~tie) + 0.5 * tie))
     out = {"n_matches": int(len(p_win)), "accuracy": acc}
     if probabilistic:
         p = np.clip(p_win, EPS, 1 - EPS)
