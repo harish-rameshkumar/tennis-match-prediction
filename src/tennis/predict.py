@@ -145,14 +145,48 @@ def predict_match(player_a, player_b, surface, date, *, tournament=None,
             "surface": surface, "date": date}
 
 
-if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="Train/save the demo models.")
-    ap.add_argument("--train", action="store_true")
+def format_prediction(r: dict) -> str:
+    """Plain-text report of a predict_match() result, for the command-line demo."""
+    lines = [f"{r['player_a']} vs {r['player_b']}  |  {r['surface']}, {r['date']}  |  model: {r['model']}",
+             "",
+             f"  {r['player_a']:<28} {r['p_a']:6.1%}",
+             f"  {r['player_b']:<28} {r['p_b']:6.1%}"]
+    if r["top_features"]:
+        lines += ["", "  Top contributing features (log-odds, from the first player's side):"]
+        for f in r["top_features"]:
+            who = r["player_a"] if f["favours"] == "A" else r["player_b"]
+            value = "" if f["value"] is None else f"  (value {f['value']:g})"
+            lines.append(f"    {f['contribution']:+.3f}  {f['feature']:<32} favours {who}{value}")
+    return "\n".join(lines)
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="Train the demo models, or predict one match.")
+    ap.add_argument("--train", action="store_true", help="train and save the demo model(s)")
     ap.add_argument("--models", nargs="+", default=[DEFAULT_MODEL],
                     choices=[m for m in MODEL_NAMES if m != "rank_baseline"])
     ap.add_argument("--test-years", nargs=2, type=int, default=list(DEFAULT_TEST_YEARS))
-    a = ap.parse_args()
+    ap.add_argument("--match", nargs=2, metavar=("PLAYER_A", "PLAYER_B"),
+                    help='predict one match, e.g. --match "Novak Djokovic" "Carlos Alcaraz"')
+    ap.add_argument("--surface", choices=["Hard", "Clay", "Grass", "Carpet"], default="Hard")
+    ap.add_argument("--date", default=str(pd.Timestamp.today().date()), help="YYYY-MM-DD (default: today)")
+    ap.add_argument("--tournament", help="tournament name or tourney_id (optional)")
+    ap.add_argument("--model", default=DEFAULT_MODEL, choices=[m for m in MODEL_NAMES if m != "rank_baseline"])
+    a = ap.parse_args(argv)
+
     if a.train:
         train_and_save(a.models, tuple(a.test_years))
-    else:
+    if a.match:
+        try:
+            r = predict_match(*a.match, a.surface, a.date, tournament=a.tournament, model=a.model)
+        except (FileNotFoundError, ValueError) as e:   # unknown/ambiguous player, no model, ...
+            print(f"error: {e}")
+            return 2
+        print(format_prediction(r))
+    if not (a.train or a.match):
         ap.print_help()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
