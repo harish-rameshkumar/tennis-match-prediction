@@ -60,8 +60,10 @@ Cleans the matches and computes every feature. Expect
 pytest
 ```
 
-Expect `29 passed`. The tests need steps 1 and 2 first; without the data they are reported as
-skipped, not passed.
+Expect `33 passed, 7 skipped`. The 7 skipped tests need the trained demo model; after
+`python -m tennis.predict --train` (see [Models and demo](#models-and-demo)), `pytest` gives
+`40 passed`. The tests need steps 1 and 2 first; without the data they are reported as skipped,
+not passed.
 
 **4. Open the EDA notebook**
 
@@ -86,14 +88,90 @@ also just open `notebooks/01_eda.ipynb` in VS Code or on GitHub. In VS Code, pic
 
 ### Models and demo
 
-> **TODO (Jayant):** fill in the real commands when the code lands. Nothing below exists yet.
+Run these after steps 1 and 2, from the repository root with the venv activated. Outputs go to
+`results/`, `reports/` and `models/`, which are gitignored because these commands rebuild them.
 
-| Stage | Command | What it does / expected output |
-| --- | --- | --- |
-| Train and evaluate | _TODO_ | _TODO_ |
-| Streamlit app | _TODO_ | _TODO_ |
-| CLI demo | _TODO_ | _TODO_ |
-| Results notebook (`notebooks/02_results.ipynb`) | _TODO_ | _TODO_ |
+**5. Train and evaluate all five models** (about 2 minutes)
+
+```bash
+python -m tennis.evaluate
+```
+
+Trains the rank baseline, logistic regression, random forest, LinearSVC and gradient boosting on
+seasons before 2019, then scores them on 2019 ATP main-tour matches. It prints one accuracy line
+per model and a summary table, and writes `results/metrics_2019.csv` (plus per-model rank-gap,
+worst-miss and explanation CSVs) and `reports/figures/calibration_2019.png`. For the
+robustness check, add `--test-years 2023 2024` (about 3 minutes).
+
+**6. Train the demo model** (about 20 seconds)
+
+```bash
+python -m tennis.predict --train
+```
+
+Trains logistic regression on seasons before 2023 and saves it to `models/predict_logreg.joblib`.
+Expect `saved models/predict_logreg.joblib  (trained on years < 2023)`. The app and the
+command-line demo both need this file.
+
+**7. Start the demo app**
+
+```bash
+streamlit run app/streamlit_app.py
+```
+
+Opens the match predictor at http://localhost:8501. Pick two players, a surface and a date, then
+press **Predict**.
+
+**Command-line demo** (fallback if the app fails)
+
+```bash
+python -m tennis.predict --match "Novak Djokovic" "Carlos Alcaraz" --surface Grass --date 2025-07-01 --tournament Wimbledon
+```
+
+Prints both players' win probabilities and the top contributing features. `--tournament` is
+optional. A misspelled or ambiguous name prints the lookup error with suggestions instead.
+
+**Results notebook:** `notebooks/02_results.ipynb` is committed with its outputs. To re-run it:
+`jupyter nbconvert --to html --execute notebooks/02_results.ipynb`.
+
+#### Results
+
+Accuracy is per match: the (A,B) and (B,A) predictions are combined with
+`combine(p_ab, p_ba)`. These are the numbers from `results/metrics_*.csv`.
+
+**Test on 2019** (2,597 ATP main-tour matches; train on 1997–2018):
+
+| Model | Test accuracy | Train accuracy | Test log-loss | Test Brier |
+| --- | --- | --- | --- | --- |
+| Rank baseline | 61.3% | 65.0% | — | 0.387 |
+| Logistic regression | 65.7% | 67.8% | 0.613 | 0.213 |
+| LinearSVC (calibrated) | **66.2%** | 67.8% | 0.612 | 0.212 |
+| Random forest | 66.1% | 85.1% | 0.611 | 0.213 |
+| Gradient boosting (HGB) | 66.1% | 68.4% | **0.610** | **0.212** |
+
+**Test on 2023–24** (5,464 matches; train on 1997–2022):
+
+| Model | Test accuracy | Train accuracy | Test log-loss | Test Brier |
+| --- | --- | --- | --- | --- |
+| Rank baseline | 63.5% | 64.3% | — | 0.365 |
+| Logistic regression | 66.0% | 67.1% | 0.605 | 0.210 |
+| LinearSVC (calibrated) | **66.1%** | 67.1% | **0.604** | 0.210 |
+| Random forest | 65.8% | 85.5% | 0.606 | 0.210 |
+| Gradient boosting (HGB) | **66.1%** | 67.7% | **0.604** | 0.210 |
+
+How to read these:
+- **Gain:** the learned models beat the rank baseline by 4.4–4.9 points on 2019 and 2.3–2.6 points
+  on 2023–24. The four models are within 0.6 points of each other.
+- **Random forest** overfits (85% train accuracy) without gaining on test.
+- **Rank baseline:** its Brier score uses hard 0/1 predictions, so it has no log-loss.
+- **Against the paper:** the paper reports 71% against a 65.5% baseline, but our 2019
+  baseline is 61.3% (see [Data notes](#data-notes)).
+
+**Ownership:** Jayant Mahishi owns `src/tennis/models.py`, `src/tennis/evaluate.py`,
+`src/tennis/ablation.py`, `src/tennis/predict.py` (`predict_match` and training),
+`app/streamlit_app.py`, `notebooks/02_results.ipynb`, `tests/test_symmetry.py` and
+`tests/test_predict.py`. The `--match` command-line demo in `predict.py` and
+`tests/test_predict_cli.py` were added by Harish.
 
 The models use `get_train_test` ([Dataset interface](#dataset-interface)), and the demo uses
 `build_match_rows` ([Inference interface](#inference-interface-srctennisinferencepy)).
@@ -118,10 +196,19 @@ tennis-match-prediction/
 │   ├── clean.py             # cleaning rules
 │   ├── features.py          # history-based features (form, head-to-head, serve, Elo)
 │   ├── dataset.py           # pairs.parquet, FEATURE_COLUMNS, get_train_test
-│   └── inference.py         # feature rows for a new match (used by the demo)
-├── tests/                   # dataset, leakage, symmetry and inference tests
-└── notebooks/
-    └── 01_eda.ipynb         # exploratory data analysis
+│   ├── inference.py         # feature rows for a new match (used by the demo)
+│   ├── models.py            # rank baseline, logistic regression, RF, LinearSVC, HGB
+│   ├── evaluate.py          # train + evaluate: metrics, calibration, error tables
+│   ├── ablation.py          # feature-group ablation
+│   └── predict.py           # predict_match, demo model training, --match CLI
+├── app/
+│   └── streamlit_app.py     # demo app
+├── tests/                   # dataset, leakage, symmetry, inference, predict and CLI tests
+├── notebooks/
+│   ├── 01_eda.ipynb         # exploratory data analysis
+│   └── 02_results.ipynb     # model results
+├── results/, reports/       # evaluation outputs (gitignored, rebuilt by tennis.evaluate)
+└── models/                  # trained demo model (gitignored, rebuilt by tennis.predict --train)
 ```
 
 ### Team
@@ -129,7 +216,7 @@ tennis-match-prediction/
 | Name | SRN | Owns |
 | --- | --- | --- |
 | Harish Ramesh Kumar | PES1UG24AM111 | data pipeline, features, inference, EDA |
-| Jayant Mahishi | PES1UG24AM122 | models, evaluation, `predict.py`, Streamlit app, results notebook |
+| Jayant Mahishi | PES1UG24AM122 | models, evaluation, ablation, `predict.py`, Streamlit app, results notebook |
 
 ### Data source and licence
 
@@ -320,10 +407,7 @@ date" query can't see.
 
 ## Results
 
-| Test set | Higher-ranked player wins |
-| --- | --- |
-| 2019 | 61.3% |
-| 2023–24 | 63.5% |
+Full model results for 2019 and 2023–24 are in [Models and demo → Results](#results).
 
 ## Data notes
 
