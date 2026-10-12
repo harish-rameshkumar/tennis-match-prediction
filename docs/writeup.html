@@ -1,0 +1,141 @@
+<!--
+  Source of docs/writeup.pdf. Rebuild from the repository root with:
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless --no-pdf-header-footer \
+      --print-to-pdf=docs/writeup.pdf "file://$PWD/docs/writeup.html"
+  All numbers come from the README results tables and results/metrics_*.csv.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pre-match Tennis Winner Prediction · UE24CS352A</title>
+<style>
+  @page { size: A4; margin: 11mm 14mm 10mm; }
+  :root { --ink: #0b0b0b; --ink-2: #52514e; --rule: #c3c2b7; --wash: #f0efec; --accent: #2a78d6; }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { margin: 0; color: var(--ink); background: #fff;
+         font: 8.7pt/1.34 -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif; }
+  header { border-bottom: 1.2pt solid var(--ink); padding-bottom: 5pt; margin-bottom: 7pt; }
+  h1 { font-size: 15pt; line-height: 1.15; margin: 0 0 3pt; letter-spacing: -0.01em; }
+  .meta { color: var(--ink-2); font-size: 8.4pt; }
+  .meta b { color: var(--ink); font-weight: 600; }
+  h2 { font-size: 9.6pt; margin: 7pt 0 2pt; text-transform: uppercase; letter-spacing: 0.04em; }
+  h2 span { color: var(--accent); margin-right: 4pt; }
+  p { margin: 0 0 4pt; }
+  ul { margin: 0 0 4pt; padding-left: 12pt; }
+  li { margin: 0 0 2pt; }
+  code { font: 8.2pt ui-monospace, "SF Mono", Menlo, monospace; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14pt; }
+  table { border-collapse: collapse; width: 100%; margin: 2pt 0 4pt; font-variant-numeric: tabular-nums; }
+  th, td { padding: 2.2pt 5pt; text-align: right; border-bottom: 0.5pt solid var(--rule); }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { border-bottom: 1pt solid var(--ink); font-weight: 600; font-size: 8.3pt; vertical-align: bottom; }
+  tbody tr.base td { color: var(--ink-2); }
+  td.best { font-weight: 700; }
+  .note { color: var(--ink-2); font-size: 8pt; margin-top: 1pt; }
+  h2, table { break-after: avoid; }
+  .cols > div > h2:first-child { margin-top: 0; }
+  footer { margin-top: 6pt; padding-top: 4pt; border-top: 0.5pt solid var(--rule); font-size: 8.2pt; color: var(--ink-2); }
+  footer b { color: var(--ink); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Pre-match Tennis Winner Prediction with Machine Learning</h1>
+  <div class="meta">
+    <b>UE24CS352A Machine Learning, Mini-Project</b> ·
+    Harish Ramesh Kumar (PES1UG24AM111) · Jayant Mahishi (PES1UG24AM122) ·
+    github.com/harish-rameshkumar/tennis-match-prediction
+  </div>
+</header>
+
+<div class="cols" style="margin-top:2pt">
+<div>
+<h2><span>1</span>Problem Statement</h2>
+<p>Predict the winner of an ATP men's singles match <em>before it starts</em>, using only information
+available at that point. We reproduce A. K. Amudan, <em>Tennis Match Prediction using Machine Learning</em>
+(Stanford CS229). The paper reports 71% accuracy with logistic regression, against a 65.5% baseline of
+always picking the higher-ranked player.</p>
+
+<h2><span>2</span>Dataset</h2>
+<p><b>Source.</b> Jeff Sackmann's <code>tennis_atp</code> match data (CC BY-NC-SA 4.0). The original
+GitHub repository is no longer available, so we download it from the archival mirror
+<code>Aneeshers/tennis-sackmann-archive</code>, pinned to one commit and checked against SHA-256
+checksums: 43 CSVs (40 MB) covering the ATP main tour 1997–2024, plus Challenger and qualifying matches
+2010–2024.</p>
+<p><b>Cleaning.</b> We drop rows with a missing player, date or rank, as well as walkovers and score-less rows.
+Retirements are kept. This leaves 196,780 of 205,168 matches.</p>
+<p><b>Splits.</b> Train on every match before 2019 (131,562 matches, including Challenger, qualifying and
+Davis Cup). Test on the 2,597 ATP main-tour matches of 2019 (Grand Slams, Masters, ATP 250/500,
+Finals). For a robustness check, train on matches up to 2022 and test on 5,464 main-tour matches from 2023–24.</p>
+</div>
+<div>
+<h2><span>3</span>Approach</h2>
+<ul>
+  <li><b>Mirrored rows.</b> Each match becomes two rows: (A = winner, label 1) and (A = loser, label 0),
+  so a model cannot learn which slot the winner is in. At test time the two predictions are combined
+  into one per match, P(A wins) = ½·(p(A,B) + 1 − p(B,A)), and accuracy is counted per match.</li>
+  <li><b>65 features.</b> The paper's player attributes (rank, ranking points, height, hand, age, kept as raw
+  values), with missing-value flags and medians computed from the training years only. Then
+  <b>47 history features</b>, mostly as A − B differences: career, last-5/10/15/25, last-30-day,
+  surface and same-tournament records; head-to-head (overall and on this surface) and win rate against
+  common opponents; career serve averages; overall and surface Elo.</li>
+  <li><b>No leakage.</b> A match's history is every tournament with an earlier start date, plus earlier
+  rounds of the same tournament. Tests rebuild every feature from explicitly filtered data for 62 sampled
+  matches, and check that flipping a future result changes no earlier feature. Two deliberately leaky
+  versions of the pipeline were both caught.</li>
+  <li><b>Models</b> (scikit-learn): rank baseline, logistic regression, LinearSVC (calibrated), random
+  forest, histogram gradient boosting.</li>
+</ul>
+</div>
+</div>
+
+<h2><span>4</span>Implementation Overview</h2>
+<p>The code is a Python 3.13 package, <code>src/tennis</code>: <code>load</code> → <code>clean</code> →
+<code>features</code> (one chronological pass with per-player state) → <code>dataset</code> (mirrored
+<code>pairs.parquet</code>, <code>get_train_test</code>) → <code>models</code> / <code>evaluate</code>.
+For a new match, <code>inference</code> builds the rows with the <em>same</em> feature code (20 tested past
+matches reproduce their stored training rows exactly), and <code>predict</code> serves a Streamlit app
+and a command-line fallback. 40 automated tests pass. On a MacBook Air, the data and features build in
+under a minute, and training and evaluating all five models takes about 2 minutes.</p>
+
+<h2><span>5</span>Results</h2>
+<table>
+  <thead>
+    <tr><th>Model</th><th>2019 test<br>accuracy</th><th>2019 train<br>accuracy</th>
+        <th>2019 test<br>log-loss</th><th>2019 test<br>Brier</th><th>2023–24 test<br>accuracy</th></tr>
+  </thead>
+  <tbody>
+    <tr class="base"><td>Rank baseline (higher rank wins)</td><td>61.3%</td><td>65.0%</td><td>—</td><td>0.387</td><td>63.5%</td></tr>
+    <tr><td>Logistic regression</td><td>65.7%</td><td>67.8%</td><td>0.613</td><td>0.213</td><td>66.0%</td></tr>
+    <tr><td>LinearSVC (calibrated)</td><td class="best">66.2%</td><td>67.8%</td><td>0.612</td><td>0.212</td><td class="best">66.1%</td></tr>
+    <tr><td>Random forest</td><td>66.1%</td><td>85.1%</td><td>0.611</td><td>0.213</td><td>65.8%</td></tr>
+    <tr><td>Gradient boosting (HGB)</td><td>66.1%</td><td>68.4%</td><td class="best">0.610</td><td class="best">0.212</td><td class="best">66.1%</td></tr>
+  </tbody>
+</table>
+<p class="note">Per-match accuracy on 2,597 matches (2019) and 5,464 matches (2023–24). The baseline makes
+hard 0/1 predictions, so it has no log-loss.</p>
+
+<h2><span>6</span>Conclusions</h2>
+<ul>
+  <li><b>All four learned models land within about half a point of each other</b> (65.7–66.2% on 2019,
+  65.8–66.1% on 2023–24). The features, not the model type, set the ceiling.</li>
+  <li><b>Random forest overfits</b>: 85.1% on its training data against 66.1% on test, with no gain over the
+  simpler models.</li>
+  <li><b>We beat the rank baseline but do not reproduce the paper's 71%.</b> Our margin over the
+  baseline is 4.4–4.9 points on 2019 (2.3–2.6 on 2023–24), against the paper's 5.5.</li>
+  <li><b>Why the baseline differs.</b> 2019 has the lowest rank baseline (61.3%) of any season from 1997
+  to 2024; 2015–2018 give 67.9%, 67.2%, 65.0% and 63.6%. This explains the gap to the paper's 65.5%
+  baseline, so we compare against our own baseline.</li>
+</ul>
+
+<footer>
+  <b>Who built what.</b> <b>Harish:</b> data pipeline, cleaning, the 47 history features and their leakage
+  tests, the inference layer, the EDA notebook, README and command-line demo. <b>Jayant:</b> the models,
+  evaluation and ablation, <code>predict_match</code>, the Streamlit app and the results notebook.
+</footer>
+
+</body>
+</html>
